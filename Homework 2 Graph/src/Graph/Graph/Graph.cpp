@@ -4,104 +4,96 @@
 #include <algorithm>
 #include <stack>
 #include <string>
+#include <iomanip>
 
 using namespace std;
 
-// 1. 定義統一的邊結構[cite: 2, 5]
+// 1. 定義邊結構
 struct Edge {
     int u, v, weight;
-    // Kruskal 排序用 (由小到大)[cite: 5]
-    bool operator<(const Edge& o) const {
-        return weight < o.weight;
-    }
-    // Prim 的 Min-Heap 優先權佇列用[cite: 2]
-    bool operator>(const Edge& o) const {
-        return weight > o.weight;
-    }
+    // 重載運算子以支援 priority_queue (小頂堆)
+    bool operator>(const Edge& o) const { return weight > o.weight; }
+    // 重載運算子以支援 sort (由小到大)
+    bool operator<(const Edge& o) const { return weight < o.weight; }
 };
 
-// 2. 併查集實作，用於 Kruskal 偵測迴路[cite: 5]
+// 2. 併查集實作
 struct DisjointSet {
     vector<int> parent;
     DisjointSet(int n) {
-        parent.resize(n, -1);
+        parent.resize(n);
+        for (int i = 0; i < n; i++) parent[i] = i; // 每個點的老大初始為自己
     }
-    int find(int i) {
-        if (parent[i] < 0) return i;
-        return parent[i] = find(parent[i]); // 路徑壓縮
-    }
-    void unite(int i, int j) {
-        int root1 = find(i);
-        int root2 = find(j);
-        if (root1 != root2) parent[root1] = root2;
+
+    // 尋找根節點 (無路徑壓縮)
+    int find(int i, long long& ops) {
+        ops++;
+        if (parent[i] == i) return i;
+        return find(parent[i], ops);
     }
 };
 
 class Graph {
 private:
-    int n;           // 頂點數
-    int e;           // 邊數
-    int num;         // dfn 序號[cite: 4]
-    int* dfn;        // 發現序號[cite: 4]
-    int* low;        // 回溯值[cite: 4]
-    bool* visited;   // 遍歷標記
+    int n, e, num;
+    int* dfn, * low;
+    bool* visited;
+    vector<pair<int, int>>* adj;
+    vector<Edge> all_edges;
+    stack<Edge> s_edges;
 
-    // 儲存結構
-    vector<pair<int, int>>* adj; // 相鄰串列: {鄰點, 權重}
-    vector<Edge> all_edges;      // 邊集合 (供 Kruskal 使用)
-    stack<Edge> s;               // 邊堆疊 (供 Biconnected 使用)[cite: 4]
+    // 效能驗證計數器
+    long long v_ops_dfs, v_ops_bfs, v_ops_kruskal, v_ops_prim, v_ops_bicon;
+    long long v_space_bfs, v_space_kruskal, v_space_prim, v_space_bicon;
 
 public:
     Graph(int nodes) : n(nodes), e(0), num(0) {
         adj = new vector<pair<int, int>>[n];
-        dfn = new int[n];
-        low = new int[n];
-        visited = new bool[n];
+        dfn = new int[n]; low = new int[n]; visited = new bool[n];
+        v_ops_dfs = v_ops_bfs = v_ops_kruskal = v_ops_prim = v_ops_bicon = 0;
+        v_space_bfs = v_space_kruskal = v_space_prim = v_space_bicon = 0;
     }
 
-    ~Graph() {
-        delete[] adj;
-        delete[] dfn;
-        delete[] low;
-        delete[] visited;
-    }
+    ~Graph() { delete[] adj; delete[] dfn; delete[] low; delete[] visited; }
 
-    // 插入帶權重的邊
     void InsertEdge(int u, int v, int w = 1) {
-        if (u >= 0 && u < n && v >= 0 && v < n) {
-            adj[u].push_back({ v, w });
-            adj[v].push_back({ u, w }); // 無向圖
-            all_edges.push_back({ u, v, w });
-            e++;
-        }
+        adj[u].push_back({ v, w });
+        adj[v].push_back({ u, w });
+        all_edges.push_back({ u, v, w });
+        e++;
     }
 
-    // --- 基礎搜尋 ---
-    void DFS(int v) {
-        cout << "DFS 順序: ";
+    void DFS(int startNode) {
         fill(visited, visited + n, false);
-        DFS_Workhorse(v);
-        cout << endl;
-    }
-
-    void DFS_Workhorse(int v) {
-        visited[v] = true;
-        cout << v << " ";
-        for (auto& edge : adj[v]) {
-            if (!visited[edge.first]) DFS_Workhorse(edge.first);
+        stack<int> s;
+        s.push(startNode);
+        cout << "\nDFS 走訪順序: ";
+        while (!s.empty()) {
+            int v = s.top(); s.pop();
+            if (!visited[v]) {
+                visited[v] = true; v_ops_dfs++;
+                cout << v << " ";
+                for (auto& edge : adj[v]) {
+                    v_ops_dfs++;
+                    if (!visited[edge.first]) s.push(edge.first);
+                }
+            }
         }
+        cout << endl;
     }
 
     void BFS(int start) {
         fill(visited, visited + n, false);
         queue<int> q;
-        visited[start] = true;
-        q.push(start);
-        cout << "BFS 順序: ";
+        visited[start] = true; q.push(start);
+        cout << "BFS 走訪順序: ";
         while (!q.empty()) {
+            v_space_bfs = max(v_space_bfs, (long long)q.size());
             int v = q.front(); q.pop();
+            v_ops_bfs++;
             cout << v << " ";
             for (auto& edge : adj[v]) {
+                v_ops_bfs++;
                 if (!visited[edge.first]) {
                     visited[edge.first] = true;
                     q.push(edge.first);
@@ -110,23 +102,77 @@ public:
         }
         cout << endl;
     }
+    void Kruskal() {
+        cout << "\nKruskal MST 邊清單:" << endl;
+        priority_queue<Edge, vector<Edge>, greater<Edge>> pq;
 
-    // --- 雙連通元件 (Biconnected Components)[cite: 4] ---
+
+        for (auto& e_item : all_edges) {
+            pq.push(e_item);
+            v_ops_kruskal++;
+        }
+        v_space_kruskal = pq.size();
+
+        DisjointSet ds(n);
+        int remain_edges = n - 1;
+
+        while (remain_edges > 0 && !pq.empty()) {
+            Edge e_edge = pq.top();
+            pq.pop();
+            v_ops_kruskal++;
+
+            int g1 = ds.find(e_edge.u, v_ops_kruskal);
+            int g2 = ds.find(e_edge.v, v_ops_kruskal);
+
+            if (g1 != g2) {
+                ds.parent[g1] = g2; // 合併群組          
+                remain_edges--;
+                v_ops_kruskal++; // 合併動作
+                cout << "  (" << e_edge.u << "," << e_edge.v << ") cost: " << e_edge.weight << endl;
+            }
+        }
+    }
+
+    void Prim() {
+        cout << "\nPrim MST 邊清單:" << endl;
+        vector<bool> inTV(n, false);
+        priority_queue<Edge, vector<Edge>, greater<Edge>> pq;
+        inTV[0] = true;
+        for (auto& edge : adj[0]) { pq.push({ 0, edge.first, edge.second }); v_ops_prim++; }
+        int count = 0;
+        while (!pq.empty() && count < n - 1) {
+            v_space_prim = max(v_space_prim, (long long)pq.size());
+            Edge e_edge = pq.top(); pq.pop();
+            v_ops_prim++;
+            if (inTV[e_edge.u] && inTV[e_edge.v]) continue;
+            int nextV = inTV[e_edge.u] ? e_edge.v : e_edge.u;
+            cout << "  (" << e_edge.u << "," << e_edge.v << ") cost: " << e_edge.weight << endl;
+            inTV[nextV] = true; count++;
+            for (auto& neighbor : adj[nextV]) {
+                if (!inTV[neighbor.first]) {
+                    pq.push({ nextV, neighbor.first, neighbor.second });
+                    v_ops_prim++;
+                }
+            }
+        }
+    }
+
     void Biconnected() {
-        num = 1;
-        fill(dfn, dfn + n, 0);
-        fill(low, low + n, 0);
-        while (!s.empty()) s.pop();
-        cout << "\n--- Biconnected Components 分析 ---" << endl;
+        num = 1; fill(dfn, dfn + n, 0); fill(low, low + n, 0);
+        while (!s_edges.empty()) s_edges.pop();
+        cout << "\n--- 雙連通元件分析 ---" << endl;
         Biconnected_Workhorse(0, -1);
     }
 
     void Biconnected_Workhorse(const int u, const int v) {
+        v_ops_bicon++;
         dfn[u] = low[u] = num++;
         for (auto& neighbor : adj[u]) {
+            v_ops_bicon++;
             int w = neighbor.first;
             if (v != w && dfn[w] < dfn[u]) {
-                s.push({ u, w, 0 }); // 權重在此不重要
+                s_edges.push({ u, w, 0 });
+                v_space_bicon = max(v_space_bicon, (long long)s_edges.size());
             }
             if (dfn[w] == 0) {
                 Biconnected_Workhorse(w, u);
@@ -135,93 +181,39 @@ public:
                     cout << "找到元件:" << endl;
                     Edge edge;
                     do {
-                        edge = s.top(); s.pop();
+                        v_ops_bicon++;
+                        edge = s_edges.top(); s_edges.pop();
                         cout << "  (" << edge.u << "," << edge.v << ")" << endl;
                     } while (!(edge.u == u && edge.v == w));
                 }
             }
-            else if (w != v) {
-                low[u] = min(low[u], dfn[w]);
-            }
+            else if (w != v) low[u] = min(low[u], dfn[w]);
         }
     }
 
-    // --- Kruskal's Algorithm[cite: 2, 5] ---
-    void Kruskal() {
-        vector<Edge> T;
-        sort(all_edges.begin(), all_edges.end()); // 1. 選擇花費最低的邊[cite: 5]
-        DisjointSet ds(n);
-
-        int i = 0;
-        // 2. 當樹邊少於 n-1 且仍有邊時[cite: 2]
-        while (T.size() < n - 1 && i < all_edges.size()) {
-            Edge e = all_edges[i++];
-            // 3. 檢查是否形成迴路[cite: 5]
-            if (ds.find(e.u) != ds.find(e.v)) {
-                ds.unite(e.u, e.v);
-                T.push_back(e);
-            }
-        }
-
-        if (T.size() < n - 1) cout << "no spanning tree" << endl;
-        else {
-            cout << "\nKruskal MST 邊清單:" << endl;
-            for (auto& e : T) cout << "  (" << e.u << "," << e.v << ") cost: " << e.weight << endl;
-        }
-    }
-
-    // --- Prim's Algorithm[cite: 2, 3] ---
-    void Prim() {
-        vector<Edge> T;
-        vector<bool> inTV(n, false);
-        priority_queue<Edge, vector<Edge>, greater<Edge>> pq; // Min-Heap[cite: 2]
-
-        inTV[0] = true; // 從頂點 0 開始[cite: 2, 3]
-        for (auto& edge : adj[0]) {
-            pq.push({ 0, edge.first, edge.second });
-        }
-
-        while (T.size() < n - 1 && !pq.empty()) {
-            Edge e = pq.top(); pq.pop();
-            if (inTV[e.u] && inTV[e.v]) continue; // 避免迴路
-
-            int nextV = inTV[e.u] ? e.v : e.u;
-            T.push_back(e);
-            inTV[nextV] = true;
-
-            for (auto& neighbor : adj[nextV]) {
-                if (!inTV[neighbor.first]) {
-                    pq.push({ nextV, neighbor.first, neighbor.second });
-                }
-            }
-        }
-
-        if (T.size() < n - 1) cout << "no spanning tree" << endl;
-        else {
-            cout << "\nPrim MST 邊清單:" << endl;
-            for (auto& e : T) cout << "  (" << e.u << "," << e.v << ") cost: " << e.weight << endl;
-        }
+    void PrintPerformanceTable() {
+        cout << "\n" << string(95, '=') << endl;
+        cout << left << setw(15) << "演算法項目" << setw(20) << "時間複雜度" << setw(20) << "空間複雜度" << setw(20) << "操作次數" << setw(20) << "空間單位" << endl;
+        cout << string(95, '-') << endl;
+        cout << setw(15) << "DFS" << setw(20) << "O(n + e)" << setw(20) << "O(n)" << setw(20) << v_ops_dfs << setw(20) << n << endl;
+        cout << setw(15) << "BFS" << setw(20) << "O(n + e)" << setw(20) << "O(n)" << setw(20) << v_ops_bfs << setw(20) << v_space_bfs << endl;
+        cout << setw(15) << "Kruskal" << setw(20) << "O(e log e)" << setw(20) << "O(e)" << setw(20) << v_ops_kruskal << setw(20) << v_space_kruskal << endl;
+        cout << setw(15) << "Prim" << setw(20) << "O(e log e)" << setw(20) << "O(e)" << setw(20) << v_ops_prim << setw(20) << v_space_prim << endl;
+        cout << setw(15) << "Biconnected" << setw(20) << "O(n + e)" << setw(20) << "O(e)" << setw(20) << v_ops_bicon << setw(20) << v_space_bicon << endl;
+        cout << string(95, '=') << endl;
     }
 };
 
 int main() {
-    // 建立教材範例中的圖[cite: 3, 5]
     Graph g(7);
-    g.InsertEdge(0, 1, 28);
-    g.InsertEdge(0, 5, 10);
-    g.InsertEdge(1, 2, 16);
-    g.InsertEdge(1, 6, 14);
-    g.InsertEdge(2, 3, 12);
-    g.InsertEdge(3, 4, 22);
-    g.InsertEdge(3, 6, 18);
-    g.InsertEdge(4, 5, 25);
+    g.InsertEdge(0, 1, 28); g.InsertEdge(0, 5, 10);
+    g.InsertEdge(1, 2, 16); g.InsertEdge(1, 6, 14);
+    g.InsertEdge(2, 3, 12); g.InsertEdge(3, 4, 22);
+    g.InsertEdge(3, 6, 18); g.InsertEdge(4, 5, 25);
     g.InsertEdge(4, 6, 24);
 
-    g.DFS(0);
-    g.BFS(0);
-    g.Kruskal();
-    g.Prim();
-    g.Biconnected();
+    g.DFS(0); g.BFS(0); g.Kruskal(); g.Prim(); g.Biconnected();
+    g.PrintPerformanceTable();
 
     return 0;
 }
